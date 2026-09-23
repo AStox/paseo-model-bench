@@ -1,7 +1,7 @@
 import { type PluginButtonContentProps, useAgent, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, type PressableStateCallbackType, Text, View } from "react-native";
 import { benchData, benchSwitch } from "../shared/rpc";
 import { preferences } from "../shared/settings";
@@ -26,7 +26,10 @@ export function BenchChart(props: PluginButtonContentProps) {
   const agentId = props.context === "agent" ? props.agentId : "";
   const agent = useAgent(agentId, (a) => ({ provider: a.provider, model: a.model, thinking: a.thinkingOptionId }));
   const settings = useSettings(preferences);
-  const saved = settings.status === "ready" ? settings.values : null;
+  // Local draft so rapid toggles apply at once; the effect below saves it one revision at a time.
+  const [draft, setDraft] = useState<typeof preferences.schema._output | null>(null);
+  const stored = settings.status === "ready" ? settings.values : null;
+  const saved = draft ?? stored;
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [selected, setSelected] = useState<{ s: string; p: number } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -50,8 +53,19 @@ export function BenchChart(props: PluginButtonContentProps) {
   const visible = series.filter((s) => !hidden.has(s.label));
 
   function save(patch: Partial<NonNullable<typeof saved>>) {
-    if (settings.status === "ready") void settings.save({ ...settings.values, ...patch }, settings.revision);
+    if (saved) setDraft({ ...saved, ...patch });
   }
+
+  useEffect(() => {
+    if (!draft || settings.status !== "ready" || settings.saving) return;
+    if (settings.saveError) {
+      setDraft(null);
+      void settings.reload();
+      return;
+    }
+    if (JSON.stringify(draft) === JSON.stringify(settings.values)) setDraft(null);
+    else void settings.save(draft, settings.revision);
+  }, [draft, settings]);
 
   const plot = useMemo(() => {
     const all = visible.flatMap((s) => s.points);
