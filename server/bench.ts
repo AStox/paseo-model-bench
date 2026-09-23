@@ -13,7 +13,7 @@ type Model = {
   thinkingOptions?: { id: string; label: string }[];
   metadata?: { supportedReasoningEfforts?: { reasoningEffort: string }[] };
 };
-type Row = { model: string; effort: string | null; score: number; cost: number; via?: string };
+type Row = { model: string; effort: string | null; score: number; cost: number };
 type Output = RpcOutput<typeof benchData>;
 
 // Epoch rows are "<model>_<effort>"; score and cost column names differ per file.
@@ -25,12 +25,17 @@ const EPOCH = [
   { id: "proofbench", label: "ProofBench", file: "proofbench_external.csv", score: "Accuracy", cost: "Cost per test (USD)", unit: "test" },
 ];
 const DATASETS = [
-  { id: "aa-coding-agent", label: "AA Coding Agent Index", unit: "task" },
+  { id: "terminal-bench-4", label: "Terminal-Bench 4.0", unit: "task" },
+  { id: "aa-intelligence", label: "AA Intelligence Index", unit: "task", points: true },
   EPOCH[0]!,
   { id: "arc-agi-2", label: "ARC-AGI-2", unit: "task" },
   ...EPOCH.slice(1),
 ];
-const SOURCE: Record<string, string> = { "arc-agi-2": "ARC Prize", "aa-coding-agent": "Artificial Analysis" };
+const SOURCE: Record<string, string> = {
+  "arc-agi-2": "ARC Prize",
+  "terminal-bench-4": "Artificial Analysis",
+  "aa-intelligence": "Artificial Analysis",
+};
 
 let cache: { at: number; data: Promise<{ rows: Record<string, Row[]>; names: Map<string, string> }> } | null = null;
 
@@ -82,38 +87,48 @@ function parseCsv(text: string) {
   return body.map((cells) => Object.fromEntries(header.map((h, i) => [h, cells[i] ?? ""])));
 }
 
-// Artificial Analysis has no keyless API; its leaderboard page embeds the results in the
-// Next.js flight payload, one object per agent + model run.
-async function artificialAnalysis(): Promise<Row[]> {
-  const html = await (await get("https://artificialanalysis.ai/agents/coding-agents")).text();
+// Artificial Analysis has no keyless API. Every model page embeds all model variants (one per
+// reasoning effort) in its Next.js flight payload, so read them from there.
+type AaVariant = {
+  release: { slug: string; name: string } | null;
+  effort: { slug: string } | null;
+  intelligenceIndex: number | null;
+  intelligenceIndexCostPerTask: { cost: { total: number } } | null;
+  intelligenceIndexEvaluations: { slug: string; score: number | null; costPerTask: number | null }[] | null;
+};
+
+async function artificialAnalysis() {
+  const html = await (await get("https://artificialanalysis.ai/models/claude-opus-5")).text();
+  // A regex over these multi-megabyte chunks silently fails in JavaScriptCore, so scan by hand.
+  const MARK = 'self.__next_f.push([1,"';
   let flight = "";
-  for (const [, chunk] of html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g)) flight += JSON.parse(`"${chunk}"`);
-  const seen = new Set<string>();
-  const rows: Row[] = [];
-  for (const m of flight.matchAll(/\{"id":"[0-9a-f]{32}","isDefault"/g)) {
-    const run = JSON.parse(jsonObjectAt(flight, m.index!)) as {
-      id: string;
-      agentName: string;
-      isUnavailable: boolean;
-      indexScore: number | null;
-      display: { model: string };
-      mean: { costUsd: number | null } | null;
-    };
-    const cost = run.mean?.costUsd ?? 0;
-    // Skip repeats and multi-model runs like "Fable 5.1 XHigh + SWE-2 Medium".
-    if (seen.has(run.id) || run.isUnavailable || run.indexScore == null || !(cost > 0) || run.display.model.includes("+")) continue;
-    seen.add(run.id);
-    const name = run.display.model.replace(/\s*\(.*$/, "");
-    rows.push({
-      model: name.toLowerCase().replace(/\s+/g, "-"),
-      effort: /\(([^)]+)\)/.exec(run.display.model)?.[1] ?? null,
-      score: run.indexScore,
-      cost,
-      via: run.agentName.replace(/\s+v?\d+(\.\d+)+.*$/, ""),
-    });
+  for (let at = html.indexOf(MARK); at !== -1; at = html.indexOf(MARK, at)) {
+    const start = at + MARK.length;
+    let end = start;
+    while (html[end] !== '"') end += html[end] === "\\" ? 2 : 1;
+    flight += JSON.parse(html.slice(start - 1, end + 1));
+    at = end;
   }
-  if (!rows.length) throw new Error("Artificial Analysis page had no coding agent results");
-  return rows;
+  const variants = new Map<string, AaVariant>();
+  for (const m of flight.matchAll(/\{"id":"[0-9a-f-]{36}","slug":"([^"]+)"/g)) {
+    if (variants.has(m[1]!)) continue;
+    const v = JSON.parse(jsonObjectAt(flight, m.index!)) as AaVariant;
+    if (v.release && v.intelligenceIndexEvaluations) variants.set(m[1]!, v);
+  }
+  const terminal: Row[] = [];
+  const intelligence: Row[] = [];
+  const names = new Map<string, string>();
+  for (const v of variants.values()) {
+    const model = v.release!.slug;
+    const effort = v.effort?.slug ?? "none";
+    names.set(modelKey(model), v.release!.name);
+    const tb = v.intelligenceIndexEvaluations!.find((e) => e.slug === "terminalbench-4-0");
+    if (tb?.score != null && tb.costPerTask! > 0) terminal.push({ model, effort, score: tb.score, cost: tb.costPerTask! });
+    const cost = v.intelligenceIndexCostPerTask?.cost.total ?? 0;
+    if (v.intelligenceIndex != null && cost > 0) intelligence.push({ model, effort, score: v.intelligenceIndex / 100, cost });
+  }
+  if (!terminal.length) throw new Error("Artificial Analysis page had no model results");
+  return { terminal, intelligence, names };
 }
 
 function jsonObjectAt(text: string, start: number) {
@@ -135,7 +150,7 @@ async function load() {
   const [aa, zip, evals, models] = await Promise.all([
     artificialAnalysis().catch((error) => {
       console.error("Artificial Analysis fetch failed", error);
-      return [];
+      return { terminal: [], intelligence: [], names: new Map<string, string>() };
     }),
     get("https://epoch.ai/data/benchmark_data.zip").then(async (r) => Buffer.from(await r.arrayBuffer())),
     get("https://arcprize.org/media/data/evaluations.json").then((r) => r.json()),
@@ -163,7 +178,9 @@ async function load() {
     if (e.datasetId !== "v2_Semi_Private" || !e.display || !m?.modelGroup || !(e.costPerTask! > 0)) return [];
     return [{ model: m.modelGroup, effort: /\(([^)]+)\)\s*$/.exec(m.displayName)?.[1] ?? null, score: e.score, cost: e.costPerTask! }];
   });
-  rows["aa-coding-agent"] = aa;
+  rows["terminal-bench-4"] = aa.terminal;
+  rows["aa-intelligence"] = aa.intelligence;
+  for (const [key, name] of aa.names) if (!names.has(key)) names.set(key, name);
   return { rows, names };
 }
 
@@ -229,7 +246,7 @@ export async function getBenchData(
     series.set(model.id, s);
     const effort = r.effort && r.effort !== "unknown" ? r.effort : null;
     s.points.push({
-      label: (effort ? effort[0]!.toUpperCase() + effort.slice(1) : "Default") + (r.via ? ` via ${r.via}` : ""),
+      label: effort ? effort[0]!.toUpperCase() + effort.slice(1) : "Default",
       thinkingOptionId: thinkingFor(model, effort),
       score: r.score,
       cost: r.cost,
@@ -237,7 +254,7 @@ export async function getBenchData(
   }
   return {
     datasetId: dataset.id,
-    datasets: DATASETS.map((d) => ({ id: d.id, label: d.label, unit: d.unit, source: SOURCE[d.id] ?? "Epoch AI" })),
+    datasets: DATASETS.map((d) => ({ id: d.id, label: d.label, unit: d.unit, points: "points" in d, source: SOURCE[d.id] ?? "Epoch AI" })),
     series: [...series.values()].map((s) => ({ ...s, points: s.points.sort((a, b) => a.cost - b.cost) })),
   };
 }

@@ -48,8 +48,11 @@ export function BenchChart(props: PluginButtonContentProps) {
   const data = query.data;
   const c = theme.colors;
   const dataset = data?.datasets.find((d) => d.id === data.datasetId);
+  // Index benchmarks score in points (0-100), the rest in percent.
+  const score = (v: number) => (dataset?.points ? (v * 100).toFixed(1) : pct(v));
   const hidden = new Set(saved?.hidden ?? []);
-  const series = (data?.series ?? []).map((s, i) => ({ ...s, color: PALETTE[i % PALETTE.length]!, marker: MARKERS[i % MARKERS.length]! }));
+  const series = (data?.series ?? []).map((s, i) => ({ ...s, color: PALETTE[i % PALETTE.length]!, // Shift the marker once colors wrap so no two models share both.
+    marker: MARKERS[(i + Math.floor(i / PALETTE.length)) % MARKERS.length]! }));
   const visible = series.filter((s) => !hidden.has(s.label));
 
   function save(patch: Partial<NonNullable<typeof saved>>) {
@@ -286,7 +289,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                       }}
                     />
                     <Text style={[muted, { position: "absolute", left: 0, width: Y_AXIS - 6, top: plot.y(v) - 7, textAlign: "right" }]}>
-                      {Math.round(v * 100)}%
+                      {Math.round(v * 100)}{dataset?.points ? "" : "%"}
                     </Text>
                   </View>
                 ))}
@@ -334,7 +337,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                       <Pressable
                         key={`${s.modelId}-p${j}`}
                         accessibilityRole="button"
-                        accessibilityLabel={`${s.label} ${p.label}: ${pct(p.score)} at ${money(p.cost)}`}
+                        accessibilityLabel={`${s.label} ${p.label}: ${score(p.score)} at ${money(p.cost)}`}
                         onPress={() => setSelected({ s: s.modelId, p: j })}
                         onHoverIn={() => setSelected({ s: s.modelId, p: j })}
                         hitSlop={4}
@@ -373,7 +376,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                     {pick.series.label} <Text style={{ color: c.foregroundMuted, fontWeight: "400" }}>· {pick.point.label}</Text>
                   </Text>
                   <Text style={[muted, { fontSize: 11 }]}>
-                    <Text style={{ color: c.foreground, fontWeight: "700" }}>{pct(pick.point.score)}</Text> score ·{" "}
+                    <Text style={{ color: c.foreground, fontWeight: "700" }}>{score(pick.point.score)}</Text> score ·{" "}
                     <Text style={{ color: c.foreground, fontWeight: "700" }}>{money(pick.point.cost)}</Text> per {dataset?.unit}
                   </Text>
                 </View>

@@ -10,7 +10,8 @@ Each line is one model from your chat's provider. Each point on it is a reasonin
 
 Pick one from the title dropdown. Your pick sticks.
 
-- Artificial Analysis Coding Agent Index (default)
+- Terminal-Bench 4.0 (default)
+- AA Intelligence Index
 - DeepSWE v1.1
 - ARC-AGI-2
 - CursorBench
@@ -18,7 +19,7 @@ Pick one from the title dropdown. Your pick sticks.
 - WeirdML
 - ProofBench
 
-The AA Coding Agent Index comes from the [Artificial Analysis coding agents leaderboard](https://artificialanalysis.ai/agents/coding-agents). They dont have a public API without a key, so the plugin reads the data embedded in that page. It only has one run per model (usually max effort), and each point says which harness ran it (Claude Code, Codex, etc). ARC-AGI-2 comes from ARC Prize's public leaderboard files. Everything else comes from [Epoch AI's benchmark data](https://epoch.ai/benchmarks) (CC BY 4.0). No API keys needed. The plugin downloads all of it on the daemon and refreshes them every hour.
+Terminal-Bench 4.0 and the AA Intelligence Index come from [Artificial Analysis](https://artificialanalysis.ai/models). They run every reasoning effort for most big models, which is why Terminal-Bench is the default. They dont have a public API without a key, so the plugin reads the data embedded in one of their model pages. If they redesign that page, those two go empty and the rest keep working. ARC-AGI-2 comes from ARC Prize's public leaderboard files. Everything else comes from [Epoch AI's benchmark data](https://epoch.ai/benchmarks) (CC BY 4.0). No API keys needed. The plugin downloads all of it on the daemon and refreshes them every hour.
 
 Not every model gets run on every benchmark, and results without a published cost get dropped. So if a model you care about is missing, thats usually why.
 

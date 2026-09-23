@@ -13,7 +13,7 @@ export const benchData = defineRpc({
   input: z.object({ provider: z.string(), datasetId: z.string().optional() }),
   output: z.object({
     datasetId: z.string(),
-    datasets: z.array(z.object({ id: z.string(), label: z.string(), unit: z.string(), source: z.string() })),
+    datasets: z.array(z.object({ id: z.string(), label: z.string(), unit: z.string(), points: z.boolean(), source: z.string() })),
     series: z.array(z.object({ label: z.string(), modelId: z.string(), points: z.array(point) })),
   }),
 });
