@@ -2,7 +2,7 @@ import { type PluginButtonContentProps, useAgent, useRpc, useSettings } from "@g
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, type PressableStateCallbackType, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, type PressableStateCallbackType, ScrollView, Text, View } from "react-native";
 import { benchData, benchSwitch } from "../shared/rpc";
 import { preferences } from "../shared/settings";
 
@@ -34,6 +34,8 @@ export function BenchChart(props: PluginButtonContentProps) {
   const [selected, setSelected] = useState<{ s: string; p: number } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [view, setView] = useState<"chart" | "list">("chart");
+  const [choice, setChoice] = useState<{ modelId: string; effort: string | null } | null>(null);
   const fetchData = useRpc(benchData);
   const switchModel = useRpc(benchSwitch);
   const toast = useToast();
@@ -51,9 +53,18 @@ export function BenchChart(props: PluginButtonContentProps) {
   // Index benchmarks score in points (0-100), the rest in percent.
   const score = (v: number) => (dataset?.points ? (v * 100).toFixed(1) : pct(v));
   const hidden = new Set(saved?.hidden ?? []);
-  const series = (data?.series ?? []).map((s, i) => ({ ...s, color: PALETTE[i % PALETTE.length]!, // Shift the marker once colors wrap so no two models share both.
-    marker: MARKERS[(i + Math.floor(i / PALETTE.length)) % MARKERS.length]! }));
+  const series = (data?.series ?? []).map((s, i) => ({
+    ...s,
+    color: PALETTE[i % PALETTE.length]!,
+    // Shift the marker once colors wrap so no two models share both.
+    marker: MARKERS[(i + Math.floor(i / PALETTE.length)) % MARKERS.length]!,
+  }));
   const visible = series.filter((s) => !hidden.has(s.label));
+  const style = new Map(series.map((s) => [s.modelId, s]));
+  const models = data?.models ?? [];
+  const unbenched = models.filter((m) => !m.benched).length;
+  // No results for this provider at all: the list is the only useful view.
+  const mode = series.length ? view : "list";
 
   function save(patch: Partial<NonNullable<typeof saved>>) {
     if (saved) setDraft({ ...saved, ...patch });
@@ -109,12 +120,11 @@ export function BenchChart(props: PluginButtonContentProps) {
   const isCurrent = (modelId: string, thinking: string | null) =>
     agent?.model === modelId && (!thinking || agent.thinking === thinking);
 
-  async function apply() {
-    if (!pick) return;
+  async function apply(modelId: string, thinkingOptionId: string | null, label: string) {
     setSwitching(true);
     try {
-      await switchModel({ agentId, modelId: pick.series.modelId, thinkingOptionId: pick.point.thinkingOptionId });
-      toast.show(`Switched to ${pick.series.label} (${pick.point.label})`, { variant: "success" });
+      await switchModel({ agentId, modelId, thinkingOptionId });
+      toast.show(`Switched to ${label}`, { variant: "success" });
       close();
     } catch (error) {
       toast.show(error instanceof Error ? error.message : String(error), { variant: "error" });
@@ -155,7 +165,32 @@ export function BenchChart(props: PluginButtonContentProps) {
             Score vs cost per {dataset?.unit ?? "task"} · {dataset?.source ?? "loading"}
           </Text>
         </View>
-        {query.isFetching && data ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : null}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {query.isFetching && data ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : null}
+          <View style={{ flexDirection: "row", padding: 2, gap: 2, borderRadius: 8, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border }}>
+            {(["chart", "list"] as const).map((v) => (
+              <Pressable
+                key={v}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: mode === v, disabled: v === "chart" && !series.length }}
+                accessibilityLabel={v === "chart" ? "Chart view" : "All models"}
+                disabled={v === "chart" && !series.length}
+                onPress={() => setView(v)}
+                style={({ hovered }: Hover) => ({
+                  paddingHorizontal: 7,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: mode === v ? c.surface0 : hovered ? c.surface2 : "transparent",
+                  borderWidth: 1,
+                  borderColor: mode === v ? c.border : "transparent",
+                  opacity: v === "chart" && !series.length ? 0.35 : 1,
+                })}
+              >
+                <Icon name={v === "chart" ? "ChartScatter" : "List"} size={14} color={mode === v ? c.foreground : c.foregroundMuted} />
+              </Pressable>
+            ))}
+          </View>
+        </View>
 
         {menuOpen && data ? (
           <View
@@ -211,10 +246,119 @@ export function BenchChart(props: PluginButtonContentProps) {
         </View>
       ) : query.error ? (
         <Text style={{ color: c.statusDanger, fontSize: 12 }}>{String(query.error)}</Text>
-      ) : !series.length ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <Text style={[muted, { fontSize: 12 }]}>No {provider} models have results here yet.</Text>
-        </View>
+      ) : mode === "list" ? (
+        <>
+          <ScrollView
+            style={{ flex: 1, borderRadius: 10, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface1 }}
+            contentContainerStyle={{ padding: 4 }}
+            showsVerticalScrollIndicator={false}
+          >
+            {models.map((m) => {
+              const s = style.get(m.id);
+              const open = choice?.modelId === m.id;
+              const current = agent.model === m.id;
+              const best = s && Math.max(...s.points.map((p) => p.score));
+              return (
+                <View key={m.id} style={{ borderRadius: 8, backgroundColor: open ? c.surface2 : "transparent" }}>
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: open }}
+                    accessibilityLabel={`${m.label}${current ? ", current model" : ""}`}
+                    onPress={() => {
+                      if (open) return setChoice(null);
+                      const effort = m.efforts.some((e) => e.id === agent.thinking) ? agent.thinking : m.defaultEffort ?? m.efforts[0]?.id ?? null;
+                      setChoice({ modelId: m.id, effort });
+                    }}
+                    style={({ hovered }: Hover) => ({
+                      flex: 1,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      paddingHorizontal: 10,
+                      paddingVertical: 7,
+                      borderRadius: 8,
+                      backgroundColor: hovered && !open ? c.surface2 : "transparent",
+                    })}
+                  >
+                    <Text style={{ width: 14, textAlign: "center", fontSize: 11, color: s ? s.color : c.foregroundMuted }}>
+                      {s ? s.marker : "○"}
+                    </Text>
+                    <Text style={{ flex: 1, color: c.foreground, fontSize: 12.5, fontWeight: current ? "700" : "500" }} numberOfLines={1}>
+                      {m.label}
+                    </Text>
+                    {open ? null : (
+                      <>
+                        <Text style={[muted, { fontSize: 10.5 }]}>{best != null ? `best ${score(best)}` : "No results"}</Text>
+                        {current ? <Icon name="Check" size={13} color={c.accent} /> : null}
+                      </>
+                    )}
+                  </Pressable>
+                    {/* Sibling, not child: a button inside the row button is hidden from screen readers. */}
+                    {open ? (
+                      isCurrent(m.id, choice!.effort) ? (
+                        <Text style={[muted, { fontSize: 11, paddingRight: 10 }]}>Current</Text>
+                      ) : (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Use ${m.label}`}
+                          disabled={switching}
+                          onPress={() => {
+                            const effort = m.efforts.find((e) => e.id === choice!.effort);
+                            void apply(m.id, choice!.effort, effort ? `${m.label} (${effort.label})` : m.label);
+                          }}
+                          style={({ hovered }: Hover) => ({
+                            paddingHorizontal: 10,
+                            paddingVertical: 4,
+                            borderRadius: 7,
+                            backgroundColor: c.accent,
+                            opacity: switching ? 0.5 : hovered ? 0.85 : 1,
+                            marginRight: 8,
+                          })}
+                        >
+                          <Text style={{ color: c.accentForeground, fontSize: 11.5, fontWeight: "600" }}>{switching ? "Switching…" : "Use"}</Text>
+                        </Pressable>
+                      )
+                    ) : null}
+                  </View>
+                  {open ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5, paddingLeft: 32, paddingRight: 10, paddingBottom: 9 }}>
+                      {m.efforts.map((e) => {
+                        const on = choice.effort === e.id;
+                        return (
+                          <Pressable
+                            key={e.id}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: on }}
+                            accessibilityLabel={`${e.label} effort`}
+                            onPress={() => setChoice({ modelId: m.id, effort: e.id })}
+                            style={({ hovered }: Hover) => ({
+                              paddingHorizontal: 8,
+                              paddingVertical: 3,
+                              borderRadius: 999,
+                              borderWidth: 1,
+                              borderColor: on ? c.accent : c.border,
+                              backgroundColor: on ? `${c.accent}22` : hovered ? c.surface1 : "transparent",
+                            })}
+                          >
+                            <Text style={{ fontSize: 11, color: on ? c.foreground : c.foregroundMuted, fontWeight: on ? "600" : "400" }}>{e.label}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </ScrollView>
+          <View style={{ minHeight: 40, justifyContent: "center" }}>
+            <Text style={[muted, { fontSize: 11 }]} numberOfLines={2}>
+              {unbenched
+                ? `${unbenched} of ${models.length} have no ${dataset?.label} results. Tap any model to use it.`
+                : "Tap any model to use it."}
+            </Text>
+          </View>
+        </>
       ) : (
         <>
           {/* Legend: each chip toggles its model on the chart. */}
@@ -265,7 +409,7 @@ export function BenchChart(props: PluginButtonContentProps) {
 
           {/* Plot. overflow hidden keeps edge tick labels from making the popover scroll. */}
           <View
-            style={{ flex: 1, overflow: "hidden", borderRadius: 10, backgroundColor: c.surface1 }}
+            style={{ flex: 1, overflow: "hidden", borderRadius: 10, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface1 }}
             onLayout={(e) => setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
           >
             {!plot ? (
@@ -387,7 +531,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                     accessibilityRole="button"
                     accessibilityLabel={`Use ${pick.series.label} ${pick.point.label}`}
                     disabled={switching}
-                    onPress={() => void apply()}
+                    onPress={() => void apply(pick.series.modelId, pick.point.thinkingOptionId, `${pick.series.label} (${pick.point.label})`)}
                     style={({ hovered }: Hover) => ({
                       paddingHorizontal: 12,
                       paddingVertical: 7,
@@ -403,7 +547,30 @@ export function BenchChart(props: PluginButtonContentProps) {
                 )}
               </>
             ) : (
-              <Text style={[muted, { fontSize: 11 }]}>Hover a point to compare. Tap a model to hide it. Shift-click the model name for the full list.</Text>
+              <>
+                <Text style={[muted, { fontSize: 11, flex: 1 }]} numberOfLines={1}>
+                  Hover to compare · tap a chip to hide
+                </Text>
+                {unbenched ? (
+                  <Pressable
+                    accessibilityRole="link"
+                    accessibilityLabel={`Show all ${models.length} models`}
+                    onPress={() => setView("list")}
+                    style={({ hovered }: Hover) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 3,
+                      paddingHorizontal: 6,
+                      paddingVertical: 3,
+                      borderRadius: 6,
+                      backgroundColor: hovered ? c.surface2 : "transparent",
+                    })}
+                  >
+                    <Text style={{ color: c.accent, fontSize: 11, fontWeight: "600" }}>All {models.length} models</Text>
+                    <Icon name="ChevronRight" size={12} color={c.accent} />
+                  </Pressable>
+                ) : null}
+              </>
             )}
           </View>
         </>

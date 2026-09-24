@@ -3,10 +3,12 @@ import { Platform } from "react-native";
 type El = {
   closest(selector: string): El | null;
   querySelector(selector: string): El | null;
+  querySelectorAll(selector: string): { length: number };
   parentElement: El | null;
   click(): void;
   getAttribute(name: string): string | null;
   getBoundingClientRect(): { left: number; top: number };
+  getClientRects(): { length: number };
   style: { transform: string; opacity: string };
 };
 type DomEvent = {
@@ -29,6 +31,7 @@ declare const document: {
 // Paseo's own testIDs for the composer's model and thinking dropdowns.
 const PICKERS = '[data-testid="combined-model-selector"],[data-testid="agent-thinking-selector"]';
 const PILL = 'button[aria-label="Model benchmarks"]';
+const COMPOSER = '[data-testid="message-input-root"]';
 const EVENTS = ["pointerdown", "mousedown", "click", "keydown"];
 
 // Paseo anchors the popover to the pill, so park the (invisible) pill over the picker while it
@@ -57,10 +60,13 @@ export function takeOverModelPicker(): () => void {
     if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
     const picker = event.target?.closest?.(PICKERS);
     if (!picker) return;
-    let scope: El | null = picker;
-    while (scope && !scope.querySelector(PILL)) scope = scope.parentElement;
+    // Only this composer's own pill. Draft composers (new workspace) have no agent and so no
+    // pill; climbing further would find another, hidden session's pill and swallow the click.
+    // Start above the composer: querySelectorAll never counts the element it's called on.
+    let scope = picker.closest(COMPOSER)?.parentElement ?? null;
+    while (scope && !scope.querySelector(PILL) && scope.querySelectorAll(COMPOSER).length === 1) scope = scope.parentElement;
     const pill = scope?.querySelector(PILL);
-    if (!pill) return;
+    if (!pill || !pill.getClientRects().length || scope!.querySelectorAll(COMPOSER).length !== 1) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (event.type === "click" || event.type === "keydown") openAt(pill, picker);

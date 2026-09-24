@@ -10,6 +10,8 @@ import type { benchData, benchSwitch } from "../shared/rpc";
 type Paseo = Parameters<Parameters<PluginServerContext["handle"]>[1]>[1]["paseo"];
 type Model = {
   id: string;
+  label?: string;
+  defaultThinkingOptionId?: string;
   thinkingOptions?: { id: string; label: string }[];
   metadata?: { supportedReasoningEfforts?: { reasoningEffort: string }[] };
 };
@@ -222,11 +224,10 @@ export async function getBenchData(
   { paseo }: { paseo: Paseo },
 ): Promise<Output> {
   const [{ rows, names }, snapshot] = await Promise.all([data(), paseo.providers.snapshot()]);
-  const models = ((snapshot.entries.find((e) => e.provider === provider)?.models ?? []) as Model[])
-    .slice()
-    .sort((a, b) => a.id.length - b.id.length);
+  const models = (snapshot.entries.find((e) => e.provider === provider)?.models ?? []) as Model[];
+  // Shortest id wins a key, so "claude-opus-5" beats "claude-opus-5[1m]".
   const byKey = new Map<string, Model>();
-  for (const m of models) if (!byKey.has(modelKey(m.id))) byKey.set(modelKey(m.id), m);
+  for (const m of [...models].sort((a, b) => a.id.length - b.id.length)) if (!byKey.has(modelKey(m.id))) byKey.set(modelKey(m.id), m);
 
   const dataset = DATASETS.find((d) => d.id === datasetId) ?? DATASETS[0]!;
   const series = new Map<string, Output["series"][number]>();
@@ -235,14 +236,7 @@ export async function getBenchData(
     const model = byKey.get(key);
     if (!model) continue;
     // "claude-sonnet-5" -> "Claude Sonnet 5", "claude-opus-4-6" -> "Claude Opus 4.6", "gpt-5.5" -> "GPT-5.5".
-    const label =
-      names.get(key) ??
-      r.model
-        .replace(/(\d)-(?=\d)/g, "$1.")
-        .replace(/-/g, " ")
-        .replace(/\b[a-z]/g, (c) => c.toUpperCase())
-        .replace(/^Gpt /, "GPT-");
-    const s = series.get(model.id) ?? { label, modelId: model.id, points: [] };
+    const s = series.get(model.id) ?? { label: names.get(key) ?? prettyName(r.model), modelId: model.id, points: [] };
     series.set(model.id, s);
     const effort = r.effort && r.effort !== "unknown" ? r.effort : null;
     s.points.push({
@@ -253,10 +247,39 @@ export async function getBenchData(
     });
   }
   return {
+    // Every model in the provider's picker, so ones without results stay selectable.
+    models: models.map((m) => {
+      const efforts = m.thinkingOptions?.length
+        ? m.thinkingOptions.map((o) => ({ id: o.id, label: o.label }))
+        : (m.metadata?.supportedReasoningEfforts ?? []).map((e) => ({ id: e.reasoningEffort, label: prettyName(e.reasoningEffort) }));
+      return {
+        id: m.id,
+        label: [
+          series.get(m.id)?.label ?? names.get(modelKey(m.id)) ?? (m.label && m.label !== m.id ? m.label : prettyName(m.id.split("/").pop()!)),
+          // "claude-opus-5[1m]" -> "... 1M", so variants don't read as duplicates.
+          /\[(.+?)\]/.exec(m.id)?.[1]?.toUpperCase(),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .replace(/^(Opus|Sonnet|Haiku|Fable) /, "Claude $1 "),
+        benched: series.has(m.id),
+        efforts,
+        defaultEffort: m.defaultThinkingOptionId ?? null,
+      };
+    }),
     datasetId: dataset.id,
     datasets: DATASETS.map((d) => ({ id: d.id, label: d.label, unit: d.unit, points: "points" in d, source: SOURCE[d.id] ?? "Epoch AI" })),
     series: [...series.values()].map((s) => ({ ...s, points: s.points.sort((a, b) => a.cost - b.cost) })),
   };
+}
+
+// "claude-sonnet-5" -> "Claude Sonnet 5", "claude-opus-4-6" -> "Claude Opus 4.6", "gpt-5.5" -> "GPT-5.5".
+function prettyName(id: string) {
+  return id
+    .replace(/(\d)-(?=\d)/g, "$1.")
+    .replace(/[-_]/g, " ")
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    .replace(/^Gpt /, "GPT-");
 }
 
 function daemonUrl() {

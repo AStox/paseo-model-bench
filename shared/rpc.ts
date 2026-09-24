@@ -12,6 +12,15 @@ export const benchData = defineRpc({
   name: "bench.data",
   input: z.object({ provider: z.string(), datasetId: z.string().optional() }),
   output: z.object({
+    models: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        benched: z.boolean(),
+        efforts: z.array(z.object({ id: z.string(), label: z.string() })),
+        defaultEffort: z.string().nullable(),
+      }),
+    ),
     datasetId: z.string(),
     datasets: z.array(z.object({ id: z.string(), label: z.string(), unit: z.string(), points: z.boolean(), source: z.string() })),
     series: z.array(z.object({ label: z.string(), modelId: z.string(), points: z.array(point) })),

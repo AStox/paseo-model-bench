@@ -27,6 +27,8 @@ Not every model gets run on every benchmark, and results without a published cos
 
 - On desktop and web, clicking the model name or the thinking level in the composer opens the chart right where the dropdown would've been. Shift-click still gets you the normal dropdown.
 - On mobile it's a Bench pill above the composer instead. Plugins cant replace built-in controls, so the desktop takeover is a click intercept on Paseo's own test IDs. If Paseo renames those, you just get the normal dropdowns back.
+- Models without results on the current benchmark are still one click away. Hit the list icon in the header (or "All N models" under the chart) to see every model in your picker, pick an effort, and use it.
+- New workspaces dont have an agent yet, so there the normal picker opens like usual.
 - Click a model chip in the legend to hide it. The chart rescales to whatever is left, and hidden models are remembered on the daemon.
 - Switching models goes through the daemon's websocket, same as the CLI, since the plugin SDK doesnt have a model setter yet. If your daemon has a password, set `PASEO_PASSWORD` on the daemon.
 
