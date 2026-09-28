@@ -1,5 +1,7 @@
 import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
-import { BenchChart } from "./client/chart";
+import { DRAFT_SIZE, initDraft, openDraft } from "./client/draft";
+import { PillIcon, SessionBench } from "./client/session";
+import { initStore } from "./client/store";
 import { takeOverModelPicker } from "./client/web";
 
 type AgentRef = { id: string; workspaceId?: string | null };
@@ -7,7 +9,9 @@ type AgentRef = { id: string; workspaceId?: string | null };
 export default function contribute(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
   const lifetime = new AbortController();
-  const restorePicker = takeOverModelPicker();
+  initStore(client.rpc);
+  const closeDraft = initDraft(client.paseo);
+  const restorePicker = takeOverModelPicker(openDraft, DRAFT_SIZE);
 
   const register = (agent: AgentRef) => {
     if (lifetime.signal.aborted || !agent.workspaceId || pills.has(agent.id)) return;
@@ -20,9 +24,9 @@ export default function contribute(client: PluginClientContext) {
         agentId,
         button: {
           title: "Model benchmarks",
-          icon: "ChartScatter",
+          icon: PillIcon,
           label: "Bench",
-          behavior: { kind: "popover", Content: BenchChart },
+          behavior: { kind: "popover", Content: SessionBench },
         },
       }),
     );
@@ -47,6 +51,7 @@ export default function contribute(client: PluginClientContext) {
     lifetime.abort();
     unsubscribe();
     restorePicker();
+    closeDraft();
     for (const pill of pills.values()) pill.remove();
     pills.clear();
   };

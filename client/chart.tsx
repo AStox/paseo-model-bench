@@ -1,18 +1,18 @@
-import { type PluginButtonContentProps, useAgent, useRpc, useSettings } from "@getpaseo/plugin/client";
-import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import type { PluginTheme } from "@getpaseo/plugin";
+import { Icon } from "@getpaseo/plugin/client/react-native";
+import { type ReactNode, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, type PressableStateCallbackType, ScrollView, Text, View } from "react-native";
-import { benchData, benchSwitch } from "../shared/rpc";
-import { preferences } from "../shared/settings";
+import { type Bench, savePrefs, useBench, usePrefs } from "./store";
 
 // React Native Web adds `hovered`; native platforms leave it undefined.
 type Hover = PressableStateCallbackType & { hovered?: boolean };
+type Effort = { id: string; label: string };
+type Model = Bench["models"][number];
 
 const PALETTE = ["#5b8def", "#f2c14e", "#b9a6f5", "#f09a6b", "#e0a030", "#8f6ee6", "#4fc3a1", "#f06b8f", "#6fc8f0", "#a8d05a"];
 const MARKERS = ["★", "●", "◆", "■", "▲", "✹", "⬟", "✚", "◐", "✦"];
-const WIDTH = 380;
-const HEIGHT = 400;
+export const WIDTH = 380;
+export const HEIGHT = 400;
 const Y_AXIS = 36;
 const X_AXIS = 20;
 const PAD_RIGHT = 14;
@@ -21,65 +21,56 @@ const MARKER = 16;
 const money = (v: number) => `$${v >= 10 ? Math.round(v) : v >= 0.1 ? v.toFixed(2) : Number(v.toPrecision(2))}`;
 const pct = (v: number) => `${(v * 100).toFixed(v >= 0.995 ? 0 : 1)}%`;
 
-export function BenchChart(props: PluginButtonContentProps) {
-  const { theme, layout, close } = props;
-  const agentId = props.context === "agent" ? props.agentId : "";
-  const agent = useAgent(agentId, (a) => ({ provider: a.provider, model: a.model, thinking: a.thinkingOptionId }));
-  const settings = useSettings(preferences);
-  // Local draft so rapid toggles apply at once; the effect below saves it one revision at a time.
-  const [draft, setDraft] = useState<typeof preferences.schema._output | null>(null);
-  const stored = settings.status === "ready" ? settings.values : null;
-  const saved = draft ?? stored;
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const [selected, setSelected] = useState<{ s: string; p: number } | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [switching, setSwitching] = useState(false);
-  const [view, setView] = useState<"chart" | "list">("chart");
-  const [choice, setChoice] = useState<{ modelId: string; effort: string | null } | null>(null);
-  const fetchData = useRpc(benchData);
-  const switchModel = useRpc(benchSwitch);
-  const toast = useToast();
-  const provider = agent?.provider ?? "";
-  const query = useQuery({
-    queryKey: ["bench", provider, saved?.datasetId],
-    queryFn: () => fetchData({ provider, datasetId: saved?.datasetId }),
-    enabled: !!provider && !!saved,
-    staleTime: 600_000,
-    placeholderData: (previous) => previous,
-  });
-  const data = query.data;
+export type BenchViewProps = {
+  theme: PluginTheme;
+  compact: boolean;
+  provider: string;
+  /** Draft composers have no agent yet, so the user picks the provider here. */
+  providers?: { id: string; label: string }[];
+  onProvider?(id: string): void;
+  current: { model: string | null; thinking: string | null };
+  onPick(model: { id: string; label: string }, effort: Effort | null): Promise<void>;
+  /** Opens the provider settings window from Paseo's own picker. */
+  onOpenSettings?(): void;
+};
+
+export function BenchView(props: BenchViewProps) {
+  const { theme, compact, provider, current, onPick } = props;
   const c = theme.colors;
+  const prefs = usePrefs();
+  const bench = useBench(provider, prefs?.datasetId, !!prefs);
+  const data = bench.data;
+  const [view, setView] = useState<"chart" | "list">("chart");
+  const [menu, setMenu] = useState<"dataset" | "provider" | null>(null);
+  const [selected, setSelected] = useState<{ s: string; p: number } | null>(null);
+  const [listModel, setListModel] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
   const dataset = data?.datasets.find((d) => d.id === data.datasetId);
   // Index benchmarks score in points (0-100), the rest in percent.
   const score = (v: number) => (dataset?.points ? (v * 100).toFixed(1) : pct(v));
-  const hidden = new Set(saved?.hidden ?? []);
-  const series = (data?.series ?? []).map((s, i) => ({
-    ...s,
-    color: PALETTE[i % PALETTE.length]!,
-    // Shift the marker once colors wrap so no two models share both.
-    marker: MARKERS[(i + Math.floor(i / PALETTE.length)) % MARKERS.length]!,
-  }));
+  const hidden = new Set(prefs?.hidden ?? []);
+  // Colors go to shown models first, so hiding some frees colors instead of repeating them.
+  const raw = data?.series ?? [];
+  const order = [...raw.filter((s) => !hidden.has(s.label)), ...raw.filter((s) => hidden.has(s.label))].map((s) => s.modelId);
+  const series = raw.map((s) => {
+    const i = order.indexOf(s.modelId);
+    return {
+      ...s,
+      color: PALETTE[i % PALETTE.length]!,
+      // Shift the marker once colors wrap so no two models share both.
+      marker: MARKERS[(i + Math.floor(i / PALETTE.length)) % MARKERS.length]!,
+    };
+  });
+  const bySeries = new Map(series.map((s) => [s.modelId, s]));
   const visible = series.filter((s) => !hidden.has(s.label));
-  const style = new Map(series.map((s) => [s.modelId, s]));
   const models = data?.models ?? [];
   const unbenched = models.filter((m) => !m.benched).length;
   // No results for this provider at all: the list is the only useful view.
   const mode = series.length ? view : "list";
-
-  function save(patch: Partial<NonNullable<typeof saved>>) {
-    if (saved) setDraft({ ...saved, ...patch });
-  }
-
-  useEffect(() => {
-    if (!draft || settings.status !== "ready" || settings.saving) return;
-    if (settings.saveError) {
-      setDraft(null);
-      void settings.reload();
-      return;
-    }
-    if (JSON.stringify(draft) === JSON.stringify(settings.values)) setDraft(null);
-    else void settings.save(draft, settings.revision);
-  }, [draft, settings]);
+  const openModel = models.find((m) => m.id === listModel);
 
   const plot = useMemo(() => {
     const all = visible.flatMap((s) => s.points);
@@ -95,7 +86,7 @@ export function BenchChart(props: PluginButtonContentProps) {
     const innerW = size.width - Y_AXIS - PAD_RIGHT;
     const innerH = size.height - X_AXIS - 8;
     const x = (cost: number) => Y_AXIS + ((Math.log10(cost) - lo) / (hi - lo || 1)) * innerW;
-    const y = (score: number) => 8 + innerH - ((score - yMin) / (yMax - yMin || 1)) * innerH;
+    const y = (value: number) => 8 + innerH - ((value - yMin) / (yMax - yMin || 1)) * innerH;
     const logTicks = (mantissas: number[]) => {
       const out: number[] = [];
       for (let k = Math.floor(lo); k <= Math.ceil(hi); k++)
@@ -108,43 +99,58 @@ export function BenchChart(props: PluginButtonContentProps) {
     return {
       x,
       y,
+      yMin,
       bottom: 8 + innerH,
       xTicks: ticks.filter((_, i) => i % step === 0),
       yTicks: Array.from({ length: Math.round((yMax - yMin) / yStep) + 1 }, (_, i) => yMin + i * yStep),
-      yMin,
     };
   }, [visible.map((s) => s.label).join("|"), data, size]);
 
   const pickSeries = selected && visible.find((s) => s.modelId === selected.s);
   const pick = pickSeries?.points[selected!.p] ? { series: pickSeries, point: pickSeries.points[selected!.p]! } : null;
   const isCurrent = (modelId: string, thinking: string | null) =>
-    agent?.model === modelId && (!thinking || agent.thinking === thinking);
+    current.model === modelId && (!thinking || current.thinking === thinking);
+  const effortLabel = (modelId: string, id: string | null) => models.find((m) => m.id === modelId)?.efforts.find((e) => e.id === id);
 
-  async function apply(modelId: string, thinkingOptionId: string | null, label: string) {
+  async function choose(model: { id: string; label: string }, effort: Effort | null) {
     setSwitching(true);
+    setError(null);
     try {
-      await switchModel({ agentId, modelId, thinkingOptionId });
-      toast.show(`Switched to ${label}`, { variant: "success" });
-      close();
-    } catch (error) {
-      toast.show(error instanceof Error ? error.message : String(error), { variant: "error" });
+      await onPick(model, effort);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSwitching(false);
     }
   }
 
+  function pressModel(m: Model) {
+    if (m.efforts.length) setListModel(m.id);
+    else void choose(m, null);
+  }
+
   const muted = { color: c.foregroundMuted, fontSize: 10, fontVariant: ["tabular-nums" as const] };
-  const loading = !agent || !saved || (query.isLoading && !data);
+  const loading = !prefs || (!data && !bench.error);
+  const providerLabel = props.providers?.find((p) => p.id === provider)?.label ?? provider;
+
+  const row = (hovered: boolean | undefined, active = false) => ({
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: active || hovered ? c.surface2 : "transparent",
+  });
 
   return (
-    <View style={{ width: layout.compact ? undefined : WIDTH, height: HEIGHT, gap: 10 }}>
-      {/* Header: benchmark name doubles as the picker trigger. */}
+    <View style={{ width: compact ? undefined : WIDTH, height: HEIGHT, gap: 10 }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", zIndex: 2 }}>
         <View style={{ flexShrink: 1 }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Benchmark: ${dataset?.label ?? "loading"}. Change benchmark`}
-            onPress={() => setMenuOpen((v) => !v)}
+            onPress={() => setMenu((m) => (m === "dataset" ? null : "dataset"))}
             style={({ hovered }: Hover) => ({
               flexDirection: "row",
               alignItems: "center",
@@ -153,20 +159,56 @@ export function BenchChart(props: PluginButtonContentProps) {
               borderRadius: 6,
               paddingHorizontal: 4,
               marginLeft: -4,
-              backgroundColor: hovered || menuOpen ? c.surface2 : "transparent",
+              backgroundColor: hovered || menu === "dataset" ? c.surface2 : "transparent",
             })}
           >
-            <Text style={{ color: c.foreground, fontSize: 17, fontWeight: "700", letterSpacing: -0.3 }}>
-              {dataset?.label ?? "Benchmarks"}
-            </Text>
-            <Icon name={menuOpen ? "ChevronUp" : "ChevronDown"} size={16} color={c.foregroundMuted} />
+            <Text style={{ color: c.foreground, fontSize: 17, fontWeight: "700", letterSpacing: -0.3 }}>{dataset?.label ?? "Benchmarks"}</Text>
+            <Icon name={menu === "dataset" ? "ChevronUp" : "ChevronDown"} size={16} color={c.foregroundMuted} />
           </Pressable>
-          <Text style={muted}>
-            Score vs cost per {dataset?.unit ?? "task"} · {dataset?.source ?? "loading"}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            {props.providers ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Provider: ${providerLabel}. Change provider`}
+                onPress={() => setMenu((m) => (m === "provider" ? null : "provider"))}
+                style={({ hovered }: Hover) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 2,
+                  borderRadius: 4,
+                  paddingHorizontal: 3,
+                  marginLeft: -3,
+                  backgroundColor: hovered || menu === "provider" ? c.surface2 : "transparent",
+                })}
+              >
+                <Text style={[muted, { color: c.foreground, fontWeight: "600" }]}>{providerLabel}</Text>
+                <Icon name="ChevronDown" size={11} color={c.foregroundMuted} />
+              </Pressable>
+            ) : null}
+            <Text style={muted} numberOfLines={1}>
+              {props.providers ? "· " : ""}Score vs cost per {dataset?.unit ?? "task"} · {dataset?.source ?? "loading"}
+            </Text>
+          </View>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          {query.isFetching && data ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : null}
+
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          {bench.fetching && data ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : null}
+          {props.onOpenSettings ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${providerLabel} settings`}
+              onPress={props.onOpenSettings}
+              style={({ hovered }: Hover) => ({
+                padding: 5,
+                borderRadius: 7,
+                borderWidth: 1,
+                borderColor: hovered ? c.border : "transparent",
+                backgroundColor: hovered ? c.surface1 : "transparent",
+              })}
+            >
+              <Icon name="Settings" size={14} color={c.foregroundMuted} />
+            </Pressable>
+          ) : null}
           <View style={{ flexDirection: "row", padding: 2, gap: 2, borderRadius: 8, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border }}>
             {(["chart", "list"] as const).map((v) => (
               <Pressable
@@ -175,7 +217,10 @@ export function BenchChart(props: PluginButtonContentProps) {
                 accessibilityState={{ selected: mode === v, disabled: v === "chart" && !series.length }}
                 accessibilityLabel={v === "chart" ? "Chart view" : "All models"}
                 disabled={v === "chart" && !series.length}
-                onPress={() => setView(v)}
+                onPress={() => {
+                  setView(v);
+                  setListModel(null);
+                }}
                 style={({ hovered }: Hover) => ({
                   paddingHorizontal: 7,
                   paddingVertical: 4,
@@ -192,51 +237,32 @@ export function BenchChart(props: PluginButtonContentProps) {
           </View>
         </View>
 
-        {menuOpen && data ? (
-          <View
-            style={{
-              position: "absolute",
-              top: 30,
-              left: -4,
-              minWidth: 180,
-              padding: 4,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: c.border,
-              backgroundColor: c.surface1,
-              shadowColor: "#000",
-              shadowOpacity: 0.25,
-              shadowRadius: 16,
-              shadowOffset: { width: 0, height: 6 },
+        {menu === "dataset" && data ? (
+          <Menu
+            theme={theme}
+            top={30}
+            items={data.datasets}
+            selected={data.datasetId}
+            onSelect={(id) => {
+              setMenu(null);
+              setSelected(null);
+              savePrefs({ datasetId: id });
             }}
-          >
-            {data.datasets.map((d) => (
-              <Pressable
-                key={d.id}
-                accessibilityRole="menuitem"
-                onPress={() => {
-                  setMenuOpen(false);
-                  setSelected(null);
-                  save({ datasetId: d.id });
-                }}
-                style={({ hovered }: Hover) => ({
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  paddingHorizontal: 10,
-                  paddingVertical: 7,
-                  borderRadius: 7,
-                  backgroundColor: hovered ? c.surface2 : "transparent",
-                })}
-              >
-                <Text style={{ color: c.foreground, fontSize: 13, fontWeight: d.id === data.datasetId ? "600" : "400" }}>
-                  {d.label}
-                </Text>
-                {d.id === data.datasetId ? <Icon name="Check" size={14} color={c.accent} /> : null}
-              </Pressable>
-            ))}
-          </View>
+          />
+        ) : null}
+        {menu === "provider" && props.providers ? (
+          <Menu
+            theme={theme}
+            top={40}
+            items={props.providers}
+            selected={provider}
+            onSelect={(id) => {
+              setMenu(null);
+              setSelected(null);
+              setListModel(null);
+              props.onProvider?.(id);
+            }}
+          />
         ) : null}
       </View>
 
@@ -244,128 +270,99 @@ export function BenchChart(props: PluginButtonContentProps) {
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator color={c.foregroundMuted} />
         </View>
-      ) : query.error ? (
-        <Text style={{ color: c.statusDanger, fontSize: 12 }}>{String(query.error)}</Text>
+      ) : bench.error && !data ? (
+        <Text style={{ color: c.statusDanger, fontSize: 12 }}>{String(bench.error)}</Text>
       ) : mode === "list" ? (
         <>
-          <ScrollView
-            style={{ flex: 1, borderRadius: 10, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface1 }}
-            contentContainerStyle={{ padding: 4 }}
-            showsVerticalScrollIndicator={false}
-          >
-            {models.map((m) => {
-              const s = style.get(m.id);
-              const open = choice?.modelId === m.id;
-              const current = agent.model === m.id;
-              const best = s && Math.max(...s.points.map((p) => p.score));
-              return (
-                <View key={m.id} style={{ borderRadius: 8, backgroundColor: open ? c.surface2 : "transparent" }}>
-                  <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ expanded: open }}
-                    accessibilityLabel={`${m.label}${current ? ", current model" : ""}`}
-                    onPress={() => {
-                      if (open) return setChoice(null);
-                      const effort = m.efforts.some((e) => e.id === agent.thinking) ? agent.thinking : m.defaultEffort ?? m.efforts[0]?.id ?? null;
-                      setChoice({ modelId: m.id, effort });
-                    }}
-                    style={({ hovered }: Hover) => ({
-                      flex: 1,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 8,
-                      paddingHorizontal: 10,
-                      paddingVertical: 7,
-                      borderRadius: 8,
-                      backgroundColor: hovered && !open ? c.surface2 : "transparent",
-                    })}
-                  >
-                    <Text style={{ width: 14, textAlign: "center", fontSize: 11, color: s ? s.color : c.foregroundMuted }}>
-                      {s ? s.marker : "○"}
-                    </Text>
-                    <Text style={{ flex: 1, color: c.foreground, fontSize: 12.5, fontWeight: current ? "700" : "500" }} numberOfLines={1}>
-                      {m.label}
-                    </Text>
-                    {open ? null : (
-                      <>
-                        <Text style={[muted, { fontSize: 10.5 }]}>{best != null ? `best ${score(best)}` : "No results"}</Text>
-                        {current ? <Icon name="Check" size={13} color={c.accent} /> : null}
-                      </>
-                    )}
-                  </Pressable>
-                    {/* Sibling, not child: a button inside the row button is hidden from screen readers. */}
-                    {open ? (
-                      isCurrent(m.id, choice!.effort) ? (
-                        <Text style={[muted, { fontSize: 11, paddingRight: 10 }]}>Current</Text>
-                      ) : (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Use ${m.label}`}
-                          disabled={switching}
-                          onPress={() => {
-                            const effort = m.efforts.find((e) => e.id === choice!.effort);
-                            void apply(m.id, choice!.effort, effort ? `${m.label} (${effort.label})` : m.label);
-                          }}
-                          style={({ hovered }: Hover) => ({
-                            paddingHorizontal: 10,
-                            paddingVertical: 4,
-                            borderRadius: 7,
-                            backgroundColor: c.accent,
-                            opacity: switching ? 0.5 : hovered ? 0.85 : 1,
-                            marginRight: 8,
-                          })}
-                        >
-                          <Text style={{ color: c.accentForeground, fontSize: 11.5, fontWeight: "600" }}>{switching ? "Switching…" : "Use"}</Text>
-                        </Pressable>
-                      )
-                    ) : null}
-                  </View>
-                  {open ? (
-                    <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5, paddingLeft: 32, paddingRight: 10, paddingBottom: 9 }}>
-                      {m.efforts.map((e) => {
-                        const on = choice.effort === e.id;
-                        return (
-                          <Pressable
-                            key={e.id}
-                            accessibilityRole="radio"
-                            accessibilityState={{ checked: on }}
-                            accessibilityLabel={`${e.label} effort`}
-                            onPress={() => setChoice({ modelId: m.id, effort: e.id })}
-                            style={({ hovered }: Hover) => ({
-                              paddingHorizontal: 8,
-                              paddingVertical: 3,
-                              borderRadius: 999,
-                              borderWidth: 1,
-                              borderColor: on ? c.accent : c.border,
-                              backgroundColor: on ? `${c.accent}22` : hovered ? c.surface1 : "transparent",
-                            })}
-                          >
-                            <Text style={{ fontSize: 11, color: on ? c.foreground : c.foregroundMuted, fontWeight: on ? "600" : "400" }}>{e.label}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : null}
-                </View>
-              );
-            })}
-          </ScrollView>
-          <View style={{ minHeight: 40, justifyContent: "center" }}>
-            <Text style={[muted, { fontSize: 11 }]} numberOfLines={2}>
-              {unbenched
-                ? `${unbenched} of ${models.length} have no ${dataset?.label} results. Tap any model to use it.`
-                : "Tap any model to use it."}
-            </Text>
+          {/* Escape hatch that mirrors Paseo's picker: model first, then effort. */}
+          <View style={{ flex: 1, borderRadius: 10, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface1, overflow: "hidden" }}>
+            {openModel ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Back to all models`}
+                  onPress={() => setListModel(null)}
+                  style={({ hovered }: Hover) => ({
+                    ...row(hovered),
+                    borderRadius: 0,
+                    borderBottomWidth: 1,
+                    borderColor: c.border,
+                    paddingVertical: 8,
+                  })}
+                >
+                  <Icon name="ChevronLeft" size={14} color={c.foregroundMuted} />
+                  <Text style={{ flex: 1, color: c.foreground, fontSize: 12.5, fontWeight: "700" }} numberOfLines={1}>
+                    {openModel.label}
+                  </Text>
+                  <Text style={muted}>Effort</Text>
+                </Pressable>
+                <ScrollView contentContainerStyle={{ padding: 4 }} showsVerticalScrollIndicator={false}>
+                  {openModel.efforts.map((e) => {
+                    const point = bySeries.get(openModel.id)?.points.find((p) => p.thinkingOptionId === e.id);
+                    const on = current.model === openModel.id && current.thinking === e.id;
+                    return (
+                      <Pressable
+                        key={e.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Use ${openModel.label} ${e.label}`}
+                        disabled={switching}
+                        onPress={() => void choose(openModel, e)}
+                        style={({ hovered }: Hover) => row(hovered)}
+                      >
+                        <Text style={{ flex: 1, color: c.foreground, fontSize: 12.5, fontWeight: on ? "700" : "500" }}>{e.label}</Text>
+                        {point ? (
+                          <Text style={[muted, { fontSize: 10.5 }]}>
+                            {score(point.score)} · {money(point.cost)}
+                          </Text>
+                        ) : null}
+                        {on ? <Icon name="Check" size={13} color={c.accent} /> : null}
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            ) : (
+              <ScrollView contentContainerStyle={{ padding: 4 }} showsVerticalScrollIndicator={false}>
+                {models.map((m) => {
+                  const s = bySeries.get(m.id);
+                  const on = current.model === m.id;
+                  const best = s && Math.max(...s.points.map((p) => p.score));
+                  return (
+                    <Pressable
+                      key={m.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${m.label}${on ? ", current model" : ""}`}
+                      disabled={switching}
+                      onPress={() => pressModel(m)}
+                      style={({ hovered }: Hover) => row(hovered)}
+                    >
+                      <Text style={{ width: 14, textAlign: "center", fontSize: 11, color: s ? s.color : c.foregroundMuted }}>{s ? s.marker : "○"}</Text>
+                      <Text style={{ flex: 1, color: c.foreground, fontSize: 12.5, fontWeight: on ? "700" : "500" }} numberOfLines={1}>
+                        {m.label}
+                      </Text>
+                      <Text style={[muted, { fontSize: 10.5 }]}>{best != null ? `best ${score(best)}` : "No results"}</Text>
+                      {on ? <Icon name="Check" size={13} color={c.accent} /> : null}
+                      {m.efforts.length ? <Icon name="ChevronRight" size={13} color={c.foregroundMuted} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
           </View>
+          <Footer theme={theme} error={error} switching={switching}>
+            {openModel
+              ? "Pick an effort level."
+              : unbenched
+                ? `${unbenched} of ${models.length} have no ${dataset?.label} results. Any of them works.`
+                : "Pick a model, then an effort level."}
+          </Footer>
         </>
       ) : (
         <>
-          {/* Legend: each chip toggles its model on the chart. */}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {series.map((s) => {
               const on = !hidden.has(s.label);
-              const current = agent.model === s.modelId;
+              const active = current.model === s.modelId;
               return (
                 <Pressable
                   key={s.modelId}
@@ -376,7 +373,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                     const next = new Set(hidden);
                     if (on) next.add(s.label);
                     else next.delete(s.label);
-                    save({ hidden: [...next] });
+                    savePrefs({ hidden: [...next] });
                   }}
                   style={({ hovered }: Hover) => ({
                     flexDirection: "row",
@@ -386,7 +383,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                     paddingVertical: 3,
                     borderRadius: 999,
                     borderWidth: 1,
-                    borderColor: current ? c.foreground : on ? c.border : "transparent",
+                    borderColor: active ? c.foreground : on ? c.border : "transparent",
                     backgroundColor: on ? (hovered ? c.surface2 : c.surface1) : "transparent",
                     opacity: on ? 1 : hovered ? 0.7 : 0.45,
                   })}
@@ -396,7 +393,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                     style={{
                       color: on ? c.foreground : c.foregroundMuted,
                       fontSize: 11,
-                      fontWeight: current ? "700" : "500",
+                      fontWeight: active ? "700" : "500",
                       textDecorationLine: on ? "none" : "line-through",
                     }}
                   >
@@ -407,7 +404,7 @@ export function BenchChart(props: PluginButtonContentProps) {
             })}
           </View>
 
-          {/* Plot. overflow hidden keeps edge tick labels from making the popover scroll. */}
+          {/* overflow hidden keeps edge tick labels from making the popover scroll. */}
           <View
             style={{ flex: 1, overflow: "hidden", borderRadius: 10, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface1 }}
             onLayout={(e) => setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
@@ -433,7 +430,8 @@ export function BenchChart(props: PluginButtonContentProps) {
                       }}
                     />
                     <Text style={[muted, { position: "absolute", left: 0, width: Y_AXIS - 6, top: plot.y(v) - 7, textAlign: "right" }]}>
-                      {Math.round(v * 100)}{dataset?.points ? "" : "%"}
+                      {Math.round(v * 100)}
+                      {dataset?.points ? "" : "%"}
                     </Text>
                   </View>
                 ))}
@@ -475,7 +473,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                 {visible.map((s) =>
                   s.points.map((p, j) => {
                     const active = pick?.series.modelId === s.modelId && selected?.p === j;
-                    const current = isCurrent(s.modelId, p.thinkingOptionId);
+                    const on = isCurrent(s.modelId, p.thinkingOptionId);
                     const focus = !pick || pick.series.modelId === s.modelId;
                     return (
                       <Pressable
@@ -494,9 +492,9 @@ export function BenchChart(props: PluginButtonContentProps) {
                           alignItems: "center",
                           justifyContent: "center",
                           borderRadius: MARKER / 2,
-                          backgroundColor: active || current ? `${s.color}33` : "transparent",
-                          borderWidth: active || current ? 1.5 : 0,
-                          borderColor: current ? c.foreground : s.color,
+                          backgroundColor: active || on ? `${s.color}33` : "transparent",
+                          borderWidth: active || on ? 1.5 : 0,
+                          borderColor: on ? c.foreground : s.color,
                           opacity: focus ? 1 : 0.3,
                           transform: [{ scale: active ? 1.35 : 1 }],
                         }}
@@ -510,7 +508,6 @@ export function BenchChart(props: PluginButtonContentProps) {
             )}
           </View>
 
-          {/* Detail bar for the hovered or tapped point. */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, minHeight: 40 }}>
             {pick ? (
               <>
@@ -519,9 +516,13 @@ export function BenchChart(props: PluginButtonContentProps) {
                   <Text style={{ color: c.foreground, fontSize: 13, fontWeight: "600" }} numberOfLines={1}>
                     {pick.series.label} <Text style={{ color: c.foregroundMuted, fontWeight: "400" }}>· {pick.point.label}</Text>
                   </Text>
-                  <Text style={[muted, { fontSize: 11 }]}>
-                    <Text style={{ color: c.foreground, fontWeight: "700" }}>{score(pick.point.score)}</Text> score ·{" "}
-                    <Text style={{ color: c.foreground, fontWeight: "700" }}>{money(pick.point.cost)}</Text> per {dataset?.unit}
+                  <Text style={[muted, { fontSize: 11, color: error ? c.statusDanger : c.foregroundMuted }]} numberOfLines={1}>
+                    {error ?? (
+                      <>
+                        <Text style={{ color: c.foreground, fontWeight: "700" }}>{score(pick.point.score)}</Text> score ·{" "}
+                        <Text style={{ color: c.foreground, fontWeight: "700" }}>{money(pick.point.cost)}</Text> per {dataset?.unit}
+                      </>
+                    )}
                   </Text>
                 </View>
                 {isCurrent(pick.series.modelId, pick.point.thinkingOptionId) ? (
@@ -531,7 +532,12 @@ export function BenchChart(props: PluginButtonContentProps) {
                     accessibilityRole="button"
                     accessibilityLabel={`Use ${pick.series.label} ${pick.point.label}`}
                     disabled={switching}
-                    onPress={() => void apply(pick.series.modelId, pick.point.thinkingOptionId, `${pick.series.label} (${pick.point.label})`)}
+                    onPress={() =>
+                      void choose(
+                        { id: pick.series.modelId, label: pick.series.label },
+                        effortLabel(pick.series.modelId, pick.point.thinkingOptionId) ?? null,
+                      )
+                    }
                     style={({ hovered }: Hover) => ({
                       paddingHorizontal: 12,
                       paddingVertical: 7,
@@ -540,9 +546,7 @@ export function BenchChart(props: PluginButtonContentProps) {
                       opacity: switching ? 0.5 : hovered ? 0.85 : 1,
                     })}
                   >
-                    <Text style={{ color: c.accentForeground, fontSize: 12, fontWeight: "600" }}>
-                      {switching ? "Switching…" : "Use model"}
-                    </Text>
+                    <Text style={{ color: c.accentForeground, fontSize: 12, fontWeight: "600" }}>{switching ? "Switching…" : "Use model"}</Text>
                   </Pressable>
                 )}
               </>
@@ -551,30 +555,90 @@ export function BenchChart(props: PluginButtonContentProps) {
                 <Text style={[muted, { fontSize: 11, flex: 1 }]} numberOfLines={1}>
                   Hover to compare · tap a chip to hide
                 </Text>
-                {unbenched ? (
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel={`Show all ${models.length} models`}
-                    onPress={() => setView("list")}
-                    style={({ hovered }: Hover) => ({
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 3,
-                      paddingHorizontal: 6,
-                      paddingVertical: 3,
-                      borderRadius: 6,
-                      backgroundColor: hovered ? c.surface2 : "transparent",
-                    })}
-                  >
-                    <Text style={{ color: c.accent, fontSize: 11, fontWeight: "600" }}>All {models.length} models</Text>
-                    <Icon name="ChevronRight" size={12} color={c.accent} />
-                  </Pressable>
-                ) : null}
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel={`Show all ${models.length} models`}
+                  onPress={() => setView("list")}
+                  style={({ hovered }: Hover) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 3,
+                    paddingHorizontal: 6,
+                    paddingVertical: 3,
+                    borderRadius: 6,
+                    backgroundColor: hovered ? c.surface2 : "transparent",
+                  })}
+                >
+                  <Text style={{ color: c.accent, fontSize: 11, fontWeight: "600" }}>All {models.length} models</Text>
+                  <Icon name="ChevronRight" size={12} color={c.accent} />
+                </Pressable>
               </>
             )}
           </View>
         </>
       )}
+    </View>
+  );
+}
+
+function Menu(props: {
+  theme: PluginTheme;
+  top: number;
+  items: { id: string; label: string }[];
+  selected: string;
+  onSelect(id: string): void;
+}) {
+  const c = props.theme.colors;
+  return (
+    <View
+      style={{
+        position: "absolute",
+        top: props.top,
+        left: -4,
+        minWidth: 180,
+        padding: 4,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: c.border,
+        backgroundColor: c.surface1,
+        shadowColor: "#000",
+        shadowOpacity: 0.25,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 6 },
+      }}
+    >
+      {props.items.map((item) => (
+        <Pressable
+          key={item.id}
+          accessibilityRole="menuitem"
+          onPress={() => props.onSelect(item.id)}
+          style={({ hovered }: Hover) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            paddingHorizontal: 10,
+            paddingVertical: 7,
+            borderRadius: 7,
+            backgroundColor: hovered ? c.surface2 : "transparent",
+          })}
+        >
+          <Text style={{ color: c.foreground, fontSize: 13, fontWeight: item.id === props.selected ? "600" : "400" }}>{item.label}</Text>
+          {item.id === props.selected ? <Icon name="Check" size={14} color={c.accent} /> : null}
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function Footer(props: { theme: PluginTheme; error: string | null; switching: boolean; children: ReactNode }) {
+  const c = props.theme.colors;
+  return (
+    <View style={{ minHeight: 40, flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {props.switching ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : null}
+      <Text style={{ flex: 1, fontSize: 11, color: props.error ? c.statusDanger : c.foregroundMuted }} numberOfLines={2}>
+        {props.error ?? props.children}
+      </Text>
     </View>
   );
 }
