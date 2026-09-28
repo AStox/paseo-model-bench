@@ -1,7 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { type ReactNode, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, type PressableStateCallbackType, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, type PressableStateCallbackType, ScrollView, Text, View } from "react-native";
 import { type Bench, savePrefs, useBench, usePrefs } from "./store";
 
 // React Native Web adds `hovered`; native platforms leave it undefined.
@@ -43,6 +43,7 @@ export function BenchView(props: BenchViewProps) {
   const [view, setView] = useState<"chart" | "list">("chart");
   const [menu, setMenu] = useState<"dataset" | "provider" | null>(null);
   const [selected, setSelected] = useState<{ s: string; p: number } | null>(null);
+  const [hoverChip, setHoverChip] = useState<string | null>(null);
   const [listModel, setListModel] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,6 +109,10 @@ export function BenchView(props: BenchViewProps) {
 
   const pickSeries = selected && visible.find((s) => s.modelId === selected.s);
   const pick = pickSeries?.points[selected!.p] ? { series: pickSeries, point: pickSeries.points[selected!.p]! } : null;
+  // A hovered legend chip wins over the hovered point for which line stands out.
+  const focusId = hoverChip ?? pick?.series.modelId ?? null;
+  // Touch has no hover, so the first tap previews a point and the second one switches.
+  const clickToUse = Platform.OS === "web";
   const isCurrent = (modelId: string, thinking: string | null) =>
     current.model === modelId && (!thinking || current.thinking === thinking);
   const effortLabel = (modelId: string, id: string | null) => models.find((m) => m.id === modelId)?.efforts.find((e) => e.id === id);
@@ -369,7 +374,10 @@ export function BenchView(props: BenchViewProps) {
                   accessibilityRole="switch"
                   accessibilityState={{ checked: on }}
                   accessibilityLabel={`${on ? "Hide" : "Show"} ${s.label}`}
+                  onHoverIn={() => on && setHoverChip(s.modelId)}
+                  onHoverOut={() => setHoverChip((id) => (id === s.modelId ? null : id))}
                   onPress={() => {
+                    if (on) setHoverChip(null);
                     const next = new Set(hidden);
                     if (on) next.add(s.label);
                     else next.delete(s.label);
@@ -449,7 +457,7 @@ export function BenchView(props: BenchViewProps) {
                     const a = s.points[j]!;
                     const [x1, y1, x2, y2] = [plot.x(a.cost), plot.y(a.score), plot.x(p.cost), plot.y(p.score)];
                     const len = Math.hypot(x2 - x1, y2 - y1);
-                    const focus = !pick || pick.series.modelId === s.modelId;
+                    const focus = !focusId || focusId === s.modelId;
                     return (
                       <View
                         key={`${s.modelId}-l${j}`}
@@ -474,13 +482,18 @@ export function BenchView(props: BenchViewProps) {
                   s.points.map((p, j) => {
                     const active = pick?.series.modelId === s.modelId && selected?.p === j;
                     const on = isCurrent(s.modelId, p.thinkingOptionId);
-                    const focus = !pick || pick.series.modelId === s.modelId;
+                    const focus = !focusId || focusId === s.modelId;
                     return (
                       <Pressable
                         key={`${s.modelId}-p${j}`}
                         accessibilityRole="button"
                         accessibilityLabel={`${s.label} ${p.label}: ${score(p.score)} at ${money(p.cost)}`}
-                        onPress={() => setSelected({ s: s.modelId, p: j })}
+                        accessibilityHint={on ? "Current model" : `Switches to ${s.label} ${p.label}`}
+                        disabled={switching}
+                        onPress={() => {
+                          if (on || (!clickToUse && !active)) return setSelected({ s: s.modelId, p: j });
+                          void choose({ id: s.modelId, label: s.label }, effortLabel(s.modelId, p.thinkingOptionId) ?? null);
+                        }}
                         onHoverIn={() => setSelected({ s: s.modelId, p: j })}
                         hitSlop={4}
                         style={{
@@ -525,35 +538,20 @@ export function BenchView(props: BenchViewProps) {
                     )}
                   </Text>
                 </View>
-                {isCurrent(pick.series.modelId, pick.point.thinkingOptionId) ? (
-                  <Text style={[muted, { fontSize: 11 }]}>Current</Text>
-                ) : (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Use ${pick.series.label} ${pick.point.label}`}
-                    disabled={switching}
-                    onPress={() =>
-                      void choose(
-                        { id: pick.series.modelId, label: pick.series.label },
-                        effortLabel(pick.series.modelId, pick.point.thinkingOptionId) ?? null,
-                      )
-                    }
-                    style={({ hovered }: Hover) => ({
-                      paddingHorizontal: 12,
-                      paddingVertical: 7,
-                      borderRadius: 8,
-                      backgroundColor: c.accent,
-                      opacity: switching ? 0.5 : hovered ? 0.85 : 1,
-                    })}
-                  >
-                    <Text style={{ color: c.accentForeground, fontSize: 12, fontWeight: "600" }}>{switching ? "Switching…" : "Use model"}</Text>
-                  </Pressable>
-                )}
+                <Text style={[muted, { fontSize: 11, color: switching ? c.foreground : c.foregroundMuted }]}>
+                  {switching
+                    ? "Switching…"
+                    : isCurrent(pick.series.modelId, pick.point.thinkingOptionId)
+                      ? "Current"
+                      : clickToUse
+                        ? "Click to use"
+                        : "Tap again to use"}
+                </Text>
               </>
             ) : (
               <>
                 <Text style={[muted, { fontSize: 11, flex: 1 }]} numberOfLines={1}>
-                  Hover to compare · tap a chip to hide
+                  Click a point to use it · tap a chip to hide
                 </Text>
                 <Pressable
                   accessibilityRole="link"
