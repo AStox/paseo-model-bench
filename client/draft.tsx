@@ -28,8 +28,8 @@ function setDraft(next: Draft | null) {
 export function openDraft(picker: unknown, anchor: Anchor) {
   if (!overlay) {
     overlay = createOverlay();
-    AppRegistry.registerComponent("model-bench-draft", () => DraftHost);
-    AppRegistry.runApplication("model-bench-draft", { rootTag: overlay.root });
+    AppRegistry.registerComponent("benchmark-picker-draft", () => DraftHost);
+    AppRegistry.runApplication("benchmark-picker-draft", { rootTag: overlay.root });
   }
   setDraft({ picker, anchor });
 }
@@ -62,7 +62,7 @@ function DraftHost() {
             .map((e) => ({ id: e.provider, label: e.label ?? e.provider })),
         ),
       )
-      .catch((error) => console.error("model-bench: provider list failed", error));
+      .catch((error) => console.error("benchmark-picker: provider list failed", error));
   }, [open]);
 
   if (!draft) return null;
@@ -73,7 +73,7 @@ function DraftHost() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Pressable accessibilityLabel="Close model benchmarks" onPress={() => setDraft(null)} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
+      <Pressable accessibilityLabel="Close Benchmark Picker" onPress={() => setDraft(null)} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
       <View
         accessibilityRole="menu"
         style={{
@@ -108,7 +108,7 @@ function DraftHost() {
               setDraft(null);
               await selectInDraft(picker, provider, model.id, effort).catch((error) => {
                 // The popup is gone by now, so fall back to Paseo's picker to finish by hand.
-                console.error("model-bench: draft selection failed", error);
+                console.error("benchmark-picker: draft selection failed", error);
                 openPaseoPicker();
               });
             }}

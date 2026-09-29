@@ -296,7 +296,7 @@ function daemonUrl() {
 export async function switchModel({ agentId, modelId, thinkingOptionId }: RpcInput<typeof benchSwitch>) {
   const client = new DaemonClient({
     url: daemonUrl(),
-    clientId: "model-bench-plugin",
+    clientId: "benchmark-picker-plugin",
     clientType: "cli",
     password: process.env.PASEO_PASSWORD || undefined,
     reconnect: { enabled: false },

@@ -1,8 +1,8 @@
-# model-bench
+# Benchmark Picker
 
 Paseo plugin. It turns the model picker into a score vs cost chart, so you can see what you're actually paying for before you switch models.
 
-![model-bench popover](docs/screenshot.png)
+![Benchmark Picker popover](docs/screenshot.png)
 
 Each line is one model from your chat's provider. Each point on it is a reasoning effort (low, medium, high, etc). Hover a point to see its score and cost, and click it to switch the chat to that model and effort (on mobile, tap once to preview and again to switch). Hover a model chip to pick its line out of the crowd.
 
@@ -33,9 +33,17 @@ Not every model gets run on every benchmark, and results without a published cos
 - Click a model chip in the legend to hide it. The chart rescales to whatever is left, and hidden models are remembered on the daemon.
 - Switching models goes through the daemon's websocket, same as the CLI, since the plugin SDK doesnt have a model setter yet. If your daemon has a password, set `PASEO_PASSWORD` on the daemon.
 
-## install
+## Install
 
 Needs Paseo 0.8 or later with plugins turned on (Settings -> Plugins).
+
+On Paseo 0.9 or later:
+
+```bash
+paseo plugin add npm:paseo-benchmark-picker
+```
+
+On Paseo 0.8:
 
 ```bash
 paseo plugin add AStox/paseo-model-bench
@@ -49,4 +57,4 @@ npm run typecheck
 paseo plugin install /absolute/path/to/paseo-model-bench
 ```
 
-After editing source, `paseo plugin reload model-bench`.
+After editing source, `paseo plugin reload benchmark-picker`.

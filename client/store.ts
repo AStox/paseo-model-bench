@@ -48,7 +48,7 @@ async function flush() {
       await readPrefs();
     }
   } catch (error) {
-    console.error("model-bench: saving preferences failed", error);
+    console.error("benchmark-picker: saving preferences failed", error);
   } finally {
     writing = false;
     void flush();
@@ -68,7 +68,7 @@ export function usePrefs() {
   useEffect(() => {
     const listener = () => tick((n) => n + 1);
     listeners.add(listener);
-    if (!writing && !pending) readPrefs().catch((error) => console.error("model-bench: loading preferences failed", error));
+    if (!writing && !pending) readPrefs().catch((error) => console.error("benchmark-picker: loading preferences failed", error));
     return () => void listeners.delete(listener);
   }, []);
   return prefs;

@@ -19,11 +19,11 @@ export default function contribute(client: PluginClientContext) {
     pills.set(
       agentId,
       client.addComposerPill({
-        id: "model-bench",
+        id: "benchmark-picker",
         workspaceId,
         agentId,
         button: {
-          title: "Model benchmarks",
+          title: "Benchmark Picker",
           icon: PillIcon,
           label: "Bench",
           behavior: { kind: "popover", Content: SessionBench },
@@ -44,7 +44,7 @@ export default function contribute(client: PluginClientContext) {
     .list({ subscribe: {}, filter: { includeArchived: false }, page: { limit: 200 } })
     .then((result) => result.entries.forEach(({ agent }) => register(agent)))
     .catch((error) => {
-      if (!lifetime.signal.aborted) console.error("model-bench: agent list failed", error);
+      if (!lifetime.signal.aborted) console.error("benchmark-picker: agent list failed", error);
     });
 
   return () => {

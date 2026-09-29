@@ -49,7 +49,7 @@ const THINKING = '[data-testid="agent-thinking-selector"]';
 const PICKERS = `${MODEL},${THINKING}`;
 const COMPOSER = '[data-testid="message-input-root"]';
 const MENU = '[data-testid="combobox-desktop-container"]';
-const PILL = 'button[aria-label="Model benchmarks"]';
+const PILL = 'button[aria-label="Benchmark Picker"]';
 const EVENTS = ["pointerdown", "mousedown", "click", "keydown"];
 
 export type Anchor = { left: number; top?: number; bottom?: number };
@@ -145,7 +145,7 @@ export function openPaseoPicker() {
   if (picker) realClick(picker);
 }
 
-const QUIET = "data-model-bench-quiet";
+const QUIET = "data-benchmark-picker-quiet";
 const SHEET = "provider-settings-sheet";
 
 // While we click through Paseo's picker for the user, it stays invisible and unclickable.
@@ -241,7 +241,7 @@ export type Overlay = { root: unknown; setActive(active: boolean): void; setBehi
 /** A full-window layer for the draft popup's own React root; inert until the popup opens. */
 export function createOverlay(): Overlay {
   const root = document.createElement("div");
-  root.setAttribute("data-model-bench", "overlay");
+  root.setAttribute("data-benchmark-picker", "overlay");
   // Flex column so React Native Web's app container (flex: 1) fills the window.
   Object.assign(root.style, {
     position: "fixed",
@@ -256,7 +256,7 @@ export function createOverlay(): Overlay {
   const font = label ? getComputedStyle(label).fontFamily : "";
   if (font) {
     const css = document.createElement("style");
-    css.textContent = `[data-model-bench="overlay"] * { font-family: ${font} !important; }`;
+    css.textContent = `[data-benchmark-picker="overlay"] * { font-family: ${font} !important; }`;
     root.appendChild(css);
   }
   // Sit just before Paseo's #overlay-root: at its z-index, its modals then paint over us.
