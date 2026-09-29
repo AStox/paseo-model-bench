@@ -4,6 +4,12 @@ Paseo plugin. It turns the model picker into a score vs cost chart, so you can s
 
 ![Benchmark Picker popover](docs/screenshot.png)
 
+
+
+https://github.com/user-attachments/assets/2c956303-d770-417b-852b-31478a208495
+
+
+
 Each line is one model from your chat's provider. Each point on it is a reasoning effort (low, medium, high, etc). Hover a point to see its score and cost, and click it to switch the chat to that model and effort (on mobile, tap once to preview and again to switch). Hover a model chip to pick its line out of the crowd.
 
 ## benchmarks
