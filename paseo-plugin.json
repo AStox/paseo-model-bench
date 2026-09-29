@@ -1,6 +1,5 @@
 {
   "id": "benchmark-picker",
-  "description": "Pick coding models by benchmark score and cost in Paseo.",
   "requirements": {
     "paseo": ">=0.8.0"
   },

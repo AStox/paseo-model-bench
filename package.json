@@ -1,6 +1,6 @@
 {
   "name": "paseo-benchmark-picker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pick coding models by benchmark score and cost in Paseo.",
   "files": ["paseo-plugin.json", "index.client.tsx", "index.server.ts", "client/", "server/", "shared/", "docs/", "README.md"],
   "scripts": {
